@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+
+import argparse
+import configparser
+import os
+import re
+import sys
+import yaml
+
+if os.path.exists("pytumblr/pytumblr/__init__.py"):
+    sys.path.insert(1, os.path.dirname(__file__) + "/pytumblr")
+import pytumblr
+
+CREDENTIALS_PATH = "~/.tumblr"
+
+class Config(configparser.ConfigParser):
+    def __init__(self, storagedir):
+        self.storagedir = storagedir
+        self.inifile = os.path.join(storagedir, "tbs.ini")
+        super().__init__(interpolation=None)
+        self.read(self.inifile)
+
+    def sync(self):
+        with open(self.inifile, 'w') as f:
+            self.write(f)
+
+    def blog_key(self, blogname):
+        return "blog/" + blogname
+
+    def blog_section(self, blogname):
+        key = self.blog_key(blogname)
+        if self.has_section(key):
+            return self[key]
+        return None
+
+    def init_blog(self, blogname):
+        count = 1
+        base_dirname = re.sub(r"[^a-zA-Z0-9.-]", "_", blogname)
+        dirname = base_dirname
+        while os.path.exists(os.path.join(self.storagedir, dirname)):
+            count += 1
+            dirname = "{0}_{1}".format(base_dirname, count)
+        os.mkdir(os.path.join(self.storagedir, dirname))
+
+        key = self.blog_key(blogname)
+        self.add_section(key)
+        self[key]['Subdirectory'] = dirname
+        self.sync()
+
+def make_arg_parser():
+    parser = argparse.ArgumentParser(description="backup tool for tumblr blogs")
+    parser.add_argument('--init', action='store_true', help="Initialize a new storage directory")
+    parser.add_argument('--storagedir', default='.', metavar="DIR", help="The directory in which to store tumblr backups (default: current directory)")
+    parser.add_argument('--credentials', metavar="FILE", default=os.path.expanduser(CREDENTIALS_PATH), help="A yaml file containing the tumblr API credentials (default: %s)" % CREDENTIALS_PATH)
+    parser.add_argument('blogname', nargs='?', help="The name of the tumblr blog to back up")
+    return parser
+
+def init_storage_dir(storagedir):
+    if os.path.isdir(storagedir):
+        if os.listdir(storagedir):
+            print("Storage directory not empty: {}".format(storagedir))
+            print("Please specify an empty directory to initialize.")
+            sys.exit(1)
+    else:
+        if os.path.isdir(os.path.dirname(storagedir)):
+            os.mkdir(storagedir)
+        else:
+            print("Storage directory not found: {}".format(storagedir))
+            sys.exit(1)
+    with open(os.path.join(storagedir, "tbs.ini"), 'w') as f:
+        f.write("[General]\n")
+    print("Initialized directory for storage: {}".format(storagedir))
+
+if __name__ == "__main__":
+    parser = make_arg_parser()
+    args = parser.parse_args()
+
+    if args.init:
+        init_storage_dir(args.storagedir)
+        if not args.blogname:
+            sys.exit(0)
+
+    if not args.blogname:
+        print("error: must specify tumblr blog name on command line")
+        sys.exit(2)
+
+    tbsconfig = Config(args.storagedir)
+    if tbsconfig.blog_section(args.blogname) is None:
+        print("Initializing storage for {}".format(args.blogname))
+        tbsconfig.init_blog(args.blogname)
+
+    print("Loading credentials from {0} ...".format(args.credentials))
+    try:
+        with open(args.credentials) as f:
+            credentials = yaml.safe_load(f)
+    except OSError as e:
+        print("{0}".format(e))
+        sys.exit(1)
+
+    client = pytumblr.TumblrRestClient(
+        credentials['consumer_key'],
+        credentials['consumer_secret'],
+        credentials['oauth_token'],
+        credentials['oauth_token_secret']
+    )
