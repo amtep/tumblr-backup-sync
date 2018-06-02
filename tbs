@@ -130,6 +130,9 @@ def sync_post(tbsconfig, blogname, post):
         os.mkdir(post_path)
     deep_prune(post, JUNK, NULL_JUNK)
     write_file(os.path.join(post_path, 'post.json'), json.dumps(post, indent=4))
+    if post['tags']:
+        tags = "".join(t + "\n" for t in post['tags'])
+        write_file(os.path.join(post_path, 'tags'), tags)
 
 def print_progress(sofar, total):
     percent = sofar * 100 / total
