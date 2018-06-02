@@ -3,7 +3,9 @@
 import argparse
 import configparser
 import os
+import json
 import re
+import requests
 import sys
 import yaml
 
@@ -12,6 +14,11 @@ if os.path.exists("pytumblr/pytumblr/__init__.py"):
 import pytumblr
 
 CREDENTIALS_PATH = "~/.tumblr"
+
+def write_file(filename, content, text=True):
+    mode = 'w' if text else 'wb'
+    with open(filename, mode) as f:
+        f.write(content)
 
 class Config(configparser.ConfigParser):
     def __init__(self, storagedir):
@@ -32,6 +39,10 @@ class Config(configparser.ConfigParser):
         if self.has_section(key):
             return self[key]
         return None
+
+    def blog_dir(self, blogname):
+        subdir = self.blog_section(blogname)['Subdirectory']
+        return os.path.join(self.storagedir, subdir)
 
     def init_blog(self, blogname):
         count = 1
@@ -67,9 +78,95 @@ def init_storage_dir(storagedir):
         else:
             print("Storage directory not found: {}".format(storagedir))
             sys.exit(1)
-    with open(os.path.join(storagedir, "tbs.ini"), 'w') as f:
-        f.write("[General]\n")
+    write_file(os.path.join(storagedir, "tbs.ini"), "[General]\n")
     print("Initialized directory for storage: {}".format(storagedir))
+
+def deep_prune(d, elim, elim_if_null):
+    if isinstance(d, dict):
+        for k in list(d):
+            if k in elim:
+                del d[k]
+            elif d[k] is None and k in elim_if_null:
+                del d[k]
+            elif isinstance(d[k], (dict, list)):
+                deep_prune(d[k], elim, elim_if_null)
+    elif isinstance(d, list):
+        for i in range(len(d)):
+            deep_prune(d[i], elim, elim_if_null)
+
+JUNK = set([
+    "blog_name",
+    "slug",
+    "summary",
+    "followed",
+    "liked",
+    "active",
+    "theme",
+    "share_likes",
+    "share_following",
+    "can_be_followed",
+    "content_raw",
+    "can_like",
+    "can_reblog",
+    "can_send_in_message",
+    "can_reply",
+    "display_avatar",
+    "reblog"
+])
+
+NULL_JUNK = set([
+    "recommended_source",
+    "recommended_color",
+])
+
+def sync_post(tbsconfig, blogname, post):
+    id = post['id']
+    # Security: don't create pathnames with unvetted data
+    if type(id) is not int:
+        print("WARNING: skipping post with bad id value {}".format(id))
+        return
+    post_path = os.path.join(tbsconfig.blog_dir(blogname), str(id))
+    if not os.path.isdir(post_path):
+        os.mkdir(post_path)
+    deep_prune(post, JUNK, NULL_JUNK)
+    write_file(os.path.join(post_path, 'post.json'), json.dumps(post, indent=4))
+
+def print_progress(sofar, total):
+    percent = sofar * 100 / total
+    print("\rSyncing posts ... {}/{} ({}%)".format(sofar, total, percent), end='\r')
+
+def backup_blog(client, tbsconfig, blogname):
+    print("Backing up {} ...".format(blogname))
+    blogdir = tbsconfig.blog_dir(blogname)
+
+    info = client.blog_info(blogname)['blog']
+    write_file(os.path.join(blogdir, 'title'), info['title'])
+    write_file(os.path.join(blogdir, 'description'), info['description'])
+
+    avatar_url = client.avatar(blogname, 512)['avatar_url']
+    resp = requests.get(avatar_url)
+    write_file(os.path.join(blogdir, 'avatar.png'), resp.content, text=False)
+
+    post_count = info['posts']
+    posts_fetched = 0
+
+    while posts_fetched < post_count:
+        print_progress(posts_fetched, post_count)
+        limit = 20
+        offset = post_count - posts_fetched - limit
+        if offset < 0:
+            limit = 20 - offset
+            offset = 0
+        posts_info = client.posts(blogname, offset=offset, limit=limit)
+        if posts_info['blog']['posts'] != post_count:
+            # to avoid desyncing, just recalculate offset and retry
+            post_count = posts_info['blog']['posts']
+            continue
+        posts_fetched += len(posts_info['posts'])
+        for post in posts_info['posts']:
+            sync_post(tbsconfig, blogname, post)
+    print_progress(posts_fetched, post_count)
+    print()
 
 if __name__ == "__main__":
     parser = make_arg_parser()
@@ -83,6 +180,9 @@ if __name__ == "__main__":
     if not args.blogname:
         print("error: must specify tumblr blog name on command line")
         sys.exit(2)
+
+    if '.' not in args.blogname:
+        args.blogname += ".tumblr.com"
 
     tbsconfig = Config(args.storagedir)
     if tbsconfig.blog_section(args.blogname) is None:
@@ -103,3 +203,5 @@ if __name__ == "__main__":
         credentials['oauth_token'],
         credentials['oauth_token_secret']
     )
+
+    backup_blog(client, tbsconfig, args.blogname)
