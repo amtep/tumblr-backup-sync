@@ -136,7 +136,7 @@ def sync_post(tbsconfig, blogname, post):
 
 def print_progress(sofar, total):
     percent = sofar * 100 / total
-    print("\rSyncing posts ... {}/{} ({}%)".format(sofar, total, percent), end='\r')
+    print("\rSyncing posts ... {}/{} ({:.1f}%)".format(sofar, total, percent), end='\r')
 
 def backup_blog(client, tbsconfig, blogname):
     print("Backing up {} ...".format(blogname))
