@@ -134,27 +134,53 @@ def sync_post(tbsconfig, blogname, post):
         tags = "".join(t + "\n" for t in post['tags'])
         write_file(os.path.join(post_path, 'tags'), tags)
 
-def print_progress(sofar, total):
+def print_progress(label, sofar, total):
     percent = sofar * 100 / total
-    print("\rSyncing posts ... {}/{} ({:.1f}%)".format(sofar, total, percent), end='\r')
+    print("\r{} ... {}/{} ({:.1f}%)".format(label, sofar, total, percent), end='\r')
+
+def get_following(client, blogname):
+    following = []
+    offset = 0
+    seen = set()
+    limit = 20
+
+    while True:
+        resp = client.blog_following(blogname, offset=offset, limit=limit)
+        offset += limit - 2
+        for f in resp['blogs']:
+            if f['name'] not in seen:
+                following.append(f)
+                seen.add(f['name'])
+        print_progress("Following", len(seen), resp['total_blogs'])
+        if len(resp['blogs']) == 0:
+            break
+    print()
+    return following
 
 def backup_blog(client, tbsconfig, blogname):
     print("Backing up {} ...".format(blogname))
     blogdir = tbsconfig.blog_dir(blogname)
 
     info = client.blog_info(blogname)['blog']
+    print("Title ...")
     write_file(os.path.join(blogdir, 'title'), info['title'])
+    print("Description ...")
     write_file(os.path.join(blogdir, 'description'), info['description'])
 
+    print("Avatar ...")
     avatar_url = client.avatar(blogname, 512)['avatar_url']
     resp = requests.get(avatar_url)
     write_file(os.path.join(blogdir, 'avatar.png'), resp.content, text=False)
+
+    print("Following ...", end='\r')
+    following = "".join(f['name'] + "\n" for f in get_following(client, blogname))
+    write_file(os.path.join(blogdir, 'following'), following)
 
     post_count = info['posts']
     posts_fetched = 0
 
     while posts_fetched < post_count:
-        print_progress(posts_fetched, post_count)
+        print_progress("Posts", posts_fetched, post_count)
         limit = 20
         offset = post_count - posts_fetched - limit
         if offset < 0:
@@ -168,7 +194,7 @@ def backup_blog(client, tbsconfig, blogname):
         posts_fetched += len(posts_info['posts'])
         for post in posts_info['posts']:
             sync_post(tbsconfig, blogname, post)
-    print_progress(posts_fetched, post_count)
+    print_progress("Posts", posts_fetched, post_count)
     print()
 
 if __name__ == "__main__":
